@@ -1,0 +1,6 @@
+SimpleITK
+nibabel
+TotalSegmentator
+numpy
+matplotlib
+gdown
