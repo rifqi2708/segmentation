@@ -1,0 +1,2 @@
+organs:
+  - {filename: spinal_cord, task: total, source_class: spinal_cord}

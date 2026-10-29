@@ -30,7 +30,7 @@ def get_organ_task (organ_yaml: str):
 def get_params (data_path: str, organ_yaml: str):
     data_folder = Path(data_path)
     input_folder = data_folder / "input"
-    output_folder = data_folder / "transit_folder" 
+    output_folder = data_folder / "spinal_cord" 
     params = []
     _, roi_subset, _, tasks = get_organ_task(organ_yaml) # get tasks and roi_subset
     
@@ -68,7 +68,7 @@ def get_params (data_path: str, organ_yaml: str):
 
 #writing json report
 def write_report_json (parameters):
-    json_dir = "/workspaces/segmentation/data/output/segmentation_parameters.json"
+    json_dir = "/workspace/segmentation/data/spinal_cord/segmentation_parameters.json"
     json_path = Path(json_dir)
     
     #write the current parameters
@@ -83,7 +83,7 @@ def write_report_json (parameters):
     }
 
     #get the written parameters
-    if file_path.exist() and file.path.stat().st_size > 0 :
+    if json_path.exists() and json_path.stat().st_size > 0 :
         with open (json_path, "r", encoding="utf-8") as file:
             try:
                 current_data = json.load(file)
@@ -109,16 +109,18 @@ def run_segmentation (data_path: str, organ_yaml: str):
     for parameter in parameters:
 
         #run the segmentation
-        if __name__ == "__main__":
-            totalsegmentator(
-                input = parameter["input"],
-                output = parameter["output"],
-                task = parameter["task"],
-                roi_subset = parameter.get("roi_subset", None),
-                device = parameter["device"]
-            )
+        
+        totalsegmentator(
+            input = parameter["input"],
+            output = parameter["output"],
+            task = parameter["task"],
+            roi_subset = parameter.get("roi_subset", None),
+            device = parameter["device"],
+            nr_thr_resamp=1,
+            nr_thr_saving=1,
+        )
 
-        write_report_json(parameters) # write the json file after one segmentation run
+        write_report_json(parameter) # write the json file after one segmentation run
 
     end_time = time.perf_counter()
     execution_time = (end_time - start_time)/60 # calculating the running time
@@ -126,4 +128,8 @@ def run_segmentation (data_path: str, organ_yaml: str):
     
     
 # Running the segmentation
-run_segmentation("/workspaces/segmentation/data", "/workspaces/segmentation/organs.yaml")
+if __name__ == "__main__":
+    run_segmentation(
+        "/workspace/segmentation/data",
+        "/workspace/segmentation/spinal_cord.yaml"
+        )
