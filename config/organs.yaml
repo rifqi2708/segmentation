@@ -37,3 +37,4 @@ organs:
   - {display_name: Sacrum, filename: sacrum, task: total, source_class: sacrum}
   - {display_name: Left hip bone, filename: hip_left, task: total, source_class: hip_left}
   - {display_name: Right hip bone, filename: hip_right, task: total, source_class: hip_right}
+  - {display_name: Spinal cord, filename: spinal_cord, task: total, source_class: spinal_cord}
