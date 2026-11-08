@@ -59,13 +59,21 @@ python -m pip check
 
 python -c "import torch; assert torch.cuda.is_available(), 'GPU unavailable'; print('GPU:', torch.cuda.get_device_name(0))"
 
-# Download data
+mkdir -p data/input data/output
+# Download full dataset
 # gdown --folder \
 #   'https://drive.google.com/drive/folders/1SG80k8JHM5Uq1HQ0Zs0S-Tq7JrfQH-sF?usp=sharing'
 
 
-# mkdir -p data/input data/output
 
 # tar --exclude='.DS_Store' --exclude='._*' \
 #     -xvf example_quadra_21/example_quadra_21.tar \
 #     -C data/input --strip-components=1
+
+
+Download example dataset
+gdown --folder \
+    'https://drive.google.com/file/d/1054dN-PtJyoBGGm3jBucwRpncyAUY9mz/view?usp=sharing'
+
+
+tar -xzvf /workspace/segmentation/practice.tar.gz -C /workspace/segmentation/data/ --strip-components=3
