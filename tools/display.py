@@ -196,6 +196,7 @@ def img_show3D_interactive (img, slice=None, mask=None, scale=1, alpha=0.3,
     indices. Mask cropping and default slices use label 1's bounding box.
     Returns the displayed widget; widget.selected_point is None until a
     click selects an (x, y, z) voxel tuple. Hover coordinates are temporary.
+    The minus/plus buttons move each axis by one slice within image bounds.
     """
     import ipywidgets as widgets
     from IPython.display import display
@@ -250,6 +251,16 @@ def img_show3D_interactive (img, slice=None, mask=None, scale=1, alpha=0.3,
     sliders = [widgets.IntSlider(value=int(index), min=0, max=size - 1,
                                 description=axis, continuous_update=False)
                for index, size, axis in zip(centres, sizes, ("X", "Y", "Z"))]
+    def move_slice(slider, step):
+        slider.value = min(slider.max, max(slider.min, slider.value + step))
+
+    axis_controls = []
+    for slider in sliders:
+        previous = widgets.Button(description="−", layout=widgets.Layout(width="32px"))
+        following = widgets.Button(description="+", layout=widgets.Layout(width="32px"))
+        previous.on_click(lambda button, slider=slider: move_slice(slider, -1))
+        following.on_click(lambda button, slider=slider: move_slice(slider, 1))
+        axis_controls.append(widgets.HBox([slider, previous, following]))
     alpha_control = widgets.FloatSlider(value=alpha, min=0, max=1, step=0.01,
                                         description="Alpha", disabled=mask is None)
     scale_control = widgets.BoundedFloatText(value=scale, min=0.01,
@@ -260,7 +271,7 @@ def img_show3D_interactive (img, slice=None, mask=None, scale=1, alpha=0.3,
     selected = widgets.Label(value="Selected: —")
     with plt.ioff():
         fig = plt.figure()
-    viewer = widgets.VBox([plane_control, widgets.HBox(sliders),
+    viewer = widgets.VBox([plane_control, widgets.HBox(axis_controls),
                            widgets.HBox([alpha_control, scale_control, crop_control]),
                            hover, selected, fig.canvas])
     viewer.selected_point = None
@@ -282,8 +293,8 @@ def img_show3D_interactive (img, slice=None, mask=None, scale=1, alpha=0.3,
         height = max(dimensions[name][1] for name in active)
         fig.set_size_inches(max(4 * len(active), width / 100) * scale_control.value,
                             max(3, height / 100) * scale_control.value)
-        for slider, name in zip(sliders, ("sagittal", "coronal", "axial")):
-            slider.layout.display = "" if name in active else "none"
+        for control, name in zip(axis_controls, ("sagittal", "coronal", "axial")):
+            control.layout.display = "" if name in active else "none"
         for position, name in enumerate(active, 1):
             if name == "axial":
                 index = (z, np.s_[y0:y1], np.s_[x0:x1])
