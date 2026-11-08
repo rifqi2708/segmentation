@@ -1,2 +1,4 @@
 /data/
 /.venv/
+/.venv311/
+/input.tar.gz
