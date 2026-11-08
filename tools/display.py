@@ -187,6 +187,160 @@ def img_show3D (img, slice= None, mask= None, scale=1, alpha = 0.3,
     plt.show()
 
 
+def img_show3D_interactive (img, slice=None, mask=None, scale=1, alpha=0.3,
+                            maskcrop=True, padding=10, plane="three"):
+    """Display an in-notebook CT viewer using the ipympl backend.
+
+    Inputs match img_show3D; plane is axial, coronal, sagittal, or three.
+    Enable %matplotlib widget before calling. Sliders use full-image voxel
+    indices. Mask cropping and default slices use label 1's bounding box.
+    Returns the displayed widget; widget.selected_point is None until a
+    click selects an (x, y, z) voxel tuple. Hover coordinates are temporary.
+    """
+    import ipywidgets as widgets
+    from IPython.display import display
+
+    if "ipympl" not in str(plt.get_backend()).lower():
+        raise RuntimeError("Run %matplotlib widget before opening the viewer")
+    if scale <= 0 or not np.isfinite(scale):
+        raise ValueError("scale must be greater than 0 and finite")
+    if not 0 <= alpha <= 1:
+        raise ValueError("alpha must be between 0 and 1")
+    if not isinstance(padding, (int, np.integer)) or padding < 0:
+        raise ValueError("padding must be a non-negative integer")
+    planes = ("axial", "coronal", "sagittal")
+    if plane not in (*planes, "three"):
+        raise ValueError("plane must be axial, coronal, sagittal, or three")
+
+    img_vec = sitk.GetArrayFromImage(img)
+    if img_vec.ndim != 3:
+        raise ValueError("Image must be a 3D scalar image")
+    zsize, ysize, xsize = img_vec.shape
+    sizes = (xsize, ysize, zsize)
+    starts = (0, 0, 0)
+    ends = sizes
+    centres = tuple(size // 2 for size in sizes)
+    mask_vec = None
+    if mask is not None:
+        mask_vec = sitk.GetArrayFromImage(mask)
+        if mask_vec.shape != img_vec.shape:
+            raise ValueError("Mask and image must have the same shape")
+        stats = sitk.LabelShapeStatisticsImageFilter()
+        stats.Execute(mask)
+        if not stats.HasLabel(1):
+            raise ValueError("Mask does not contain label 1")
+        box = stats.GetBoundingBox(1)
+        starts = tuple(max(0, start - padding) for start in box[:3])
+        ends = tuple(min(size, start + length + padding)
+                     for size, start, length in zip(sizes, box[:3], box[3:]))
+        centres = tuple(start + length // 2
+                        for start, length in zip(box[:3], box[3:]))
+    if slice is not None:
+        if len(slice) != 3:
+            raise ValueError("slice must contain (x, y, z)")
+        centres = tuple(slice)
+    for index, size in zip(centres, sizes):
+        if not isinstance(index, (int, np.integer)) or not 0 <= index < size:
+            raise ValueError("slice indices must be integers within the full image")
+
+    plane_control = widgets.Dropdown(
+        options=[("Axial", "axial"), ("Coronal", "coronal"),
+                 ("Sagittal", "sagittal"), ("Three planes", "three")],
+        value=plane, description="Plane")
+    sliders = [widgets.IntSlider(value=int(index), min=0, max=size - 1,
+                                description=axis, continuous_update=False)
+               for index, size, axis in zip(centres, sizes, ("X", "Y", "Z"))]
+    alpha_control = widgets.FloatSlider(value=alpha, min=0, max=1, step=0.01,
+                                        description="Alpha", disabled=mask is None)
+    scale_control = widgets.BoundedFloatText(value=scale, min=0.01,
+                                             max=max(100, scale), description="Scale")
+    crop_control = widgets.Checkbox(value=bool(maskcrop and mask is not None),
+                                    description="Crop to mask", disabled=mask is None)
+    hover = widgets.Label(value="Hover: —")
+    selected = widgets.Label(value="Selected: —")
+    with plt.ioff():
+        fig = plt.figure()
+    viewer = widgets.VBox([plane_control, widgets.HBox(sliders),
+                           widgets.HBox([alpha_control, scale_control, crop_control]),
+                           hover, selected, fig.canvas])
+    viewer.selected_point = None
+    vmin, vmax = img_vec.min(), img_vec.max()
+    axes_planes = {}
+
+    def draw(change=None):
+        fig.clear()
+        axes_planes.clear()
+        hover.value = "Hover: —"
+        x, y, z = (slider.value for slider in sliders)
+        x0, y0, z0 = starts if crop_control.value else (0, 0, 0)
+        x1, y1, z1 = ends if crop_control.value else sizes
+        active = planes if plane_control.value == "three" else (plane_control.value,)
+        dimensions = {"axial": (x1 - x0, y1 - y0),
+                      "coronal": (x1 - x0, z1 - z0),
+                      "sagittal": (y1 - y0, z1 - z0)}
+        width = sum(dimensions[name][0] for name in active)
+        height = max(dimensions[name][1] for name in active)
+        fig.set_size_inches(max(4 * len(active), width / 100) * scale_control.value,
+                            max(3, height / 100) * scale_control.value)
+        for slider, name in zip(sliders, ("sagittal", "coronal", "axial")):
+            slider.layout.display = "" if name in active else "none"
+        for position, name in enumerate(active, 1):
+            if name == "axial":
+                index = (z, np.s_[y0:y1], np.s_[x0:x1])
+                extent = (x0 - 0.5, x1 - 0.5, y0 - 0.5, y1 - 0.5)
+                horizontal, vertical, fixed, number = "x", "y", "Z", z
+            elif name == "coronal":
+                index = (np.s_[z0:z1], y, np.s_[x0:x1])
+                extent = (x0 - 0.5, x1 - 0.5, z0 - 0.5, z1 - 0.5)
+                horizontal, vertical, fixed, number = "x", "z", "Y", y
+            else:
+                index = (np.s_[z0:z1], np.s_[y0:y1], x)
+                extent = (y0 - 0.5, y1 - 0.5, z0 - 0.5, z1 - 0.5)
+                horizontal, vertical, fixed, number = "y", "z", "X", x
+            ax = fig.add_subplot(1, len(active), position)
+            axes_planes[ax] = name
+            ax.imshow(img_vec[index], cmap=plt.cm.Grays_r, vmin=vmin, vmax=vmax,
+                      origin="lower", extent=extent)
+            if mask_vec is not None:
+                mask_slice = mask_vec[index]
+                ax.imshow(np.ma.masked_where(mask_slice == 0, mask_slice),
+                          cmap="Wistia", alpha=alpha_control.value,
+                          origin="lower", extent=extent)
+            ax.set_title(f"{name.capitalize()} slice\nSlice index, {fixed} = {number}")
+            ax.set_xlabel(f"{horizontal}-axis")
+            ax.set_ylabel(f"{vertical}-axis")
+        fig.tight_layout()
+        fig.canvas.draw_idle()
+
+    def point_event(event):
+        if event.inaxes not in axes_planes or event.xdata is None or event.ydata is None:
+            if event.name == "motion_notify_event":
+                hover.value = "Hover: —"
+            return
+        if fig.canvas.toolbar is not None and fig.canvas.toolbar.mode:
+            return
+        u, v = int(np.floor(event.xdata + 0.5)), int(np.floor(event.ydata + 0.5))
+        x, y, z = (slider.value for slider in sliders)
+        name = axes_planes[event.inaxes]
+        point = {"axial": (u, v, z), "coronal": (u, y, v),
+                 "sagittal": (x, u, v)}[name]
+        if not all(0 <= index < size for index, size in zip(point, sizes)):
+            return
+        if event.name == "button_press_event" and event.button == 1:
+            viewer.selected_point = point
+            selected.value = f"Selected (x, y, z): {point}"
+        elif event.name == "motion_notify_event":
+            hover.value = f"Hover (x, y, z): {point}"
+
+    for control in [plane_control, *sliders, alpha_control, scale_control, crop_control]:
+        control.observe(draw, names="value")
+    fig.canvas.mpl_connect("motion_notify_event", point_event)
+    fig.canvas.mpl_connect("button_press_event", point_event)
+    draw()
+    display(viewer)
+    return viewer
+
+
 def img_show2D(img, mask=None, scale=1, alpha = 0.3):
     dpi = 100
 

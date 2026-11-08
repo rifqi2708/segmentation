@@ -4,4 +4,6 @@ nibabel
 TotalSegmentator
 numpy
 matplotlib
+ipywidgets
+ipympl
 gdown
