@@ -364,10 +364,16 @@ def img_compare3D(img1, img2, name1="Image 1", name2="Image 2", slice=None,
     overlays and label-1 cropping for both images.
 
     Each plane occupies a row, with img1 on the left and img2 on the right.
-    Each image has its own intensity-window control. Click either image to
-    synchronize the slices and crosshairs in every view. Slice controls move
+    Each image has independent lower/upper and width/center window inputs
+    (scientific notation is accepted), synchronized using lower = center -
+    width/2 and upper = center + width/2. CT presets assume HU intensities:
+    soft tissue W400/C40, bone W1800/C400, lungs W1500/C-600. They are display
+    starting points, not intensity conversions for derived response images.
+    Click either image to synchronize slices and crosshairs in every view;
+    a central gap leaves the selected voxel visible. Slice controls move
     that shared cursor after selection. Returns the displayed widget with
-    ``selected_point`` set to None until a click, then an (x, y, z) tuple.
+    ``selected_point`` (x, y, z) and ``selected_values`` (img1, img2), both
+    None until a click. Values are from the input images, before windowing.
     """
     import ipywidgets as widgets
     from IPython.display import display
@@ -416,6 +422,9 @@ def img_compare3D(img1, img2, name1="Image 1", name2="Image 2", slice=None,
         if not isinstance(index, (int, np.integer)) or not 0 <= index < size:
             raise ValueError("slice indices must be integers within the full image")
 
+    # Example CT windows from the University of Michigan BPAD course:
+    # https://socr.umich.edu/BPAD1/BPAD1_notes/BPAD1_Chap05_Xray_CT.html
+    presets = {"soft": (400, 40), "bone": (1800, 400), "lungs": (1500, -600)}
     windows = []
     for values in images:
         finite = values[np.isfinite(values)]
@@ -426,10 +435,23 @@ def img_compare3D(img1, img2, name1="Image 1", name2="Image 2", slice=None,
         if constant:
             margin = max(0.5, abs(low) * 0.01)
             low, high = low - margin, high + margin
-        windows.append(widgets.FloatRangeSlider(
-            value=(low, high), min=low, max=high, step=(high - low) / 1000,
-            description="Window", readout_format=".4g", disabled=constant,
-            continuous_update=False, layout=widgets.Layout(width="95%")))
+        controls = {
+            key: widgets.FloatText(value=value, description=key.capitalize(),
+                                   continuous_update=False,
+                                   style={"description_width": "55px"},
+                                   layout=widgets.Layout(width="49%"))
+            for key, value in (("lower", low), ("upper", high),
+                               ("width", high - low), ("center", low / 2 + high / 2))}
+        controls["preset"] = widgets.Dropdown(
+            options=[("Full range", "full"), ("Custom", "custom"),
+                     ("Soft tissue (W400 / C40)", "soft"),
+                     ("Bone (W1800 / C400)", "bone"),
+                     ("Lungs (W1500 / C-600)", "lungs")],
+            value="full", description="Preset (HU)",
+            layout=widgets.Layout(width="98%"))
+        controls["message"] = widgets.Label(value="")
+        controls["range"] = controls["full_range"] = (low, high)
+        windows.append(controls)
 
     plane_control = widgets.Dropdown(
         options=[("Axial", "axial"), ("Coronal", "coronal"),
@@ -460,7 +482,10 @@ def img_compare3D(img1, img2, name1="Image 1", name2="Image 2", slice=None,
     with plt.ioff():
         fig = plt.figure()
     window_controls = widgets.HBox([
-        widgets.VBox([widgets.Label(value=str(name)), control],
+        widgets.VBox([widgets.Label(value=str(name)), control["preset"],
+                      widgets.HBox([control["lower"], control["upper"]]),
+                      widgets.HBox([control["width"], control["center"]]),
+                      control["message"]],
                      layout=widgets.Layout(width="50%"))
         for name, control in zip((name1, name2), windows)])
     viewer = widgets.VBox([
@@ -468,8 +493,45 @@ def img_compare3D(img1, img2, name1="Image 1", name2="Image 2", slice=None,
         plane_control, widgets.VBox(axis_controls), window_controls,
         fig.canvas, selected, hover])
     viewer.selected_point = None
+    viewer.selected_values = None
     axes_planes = {}
     updating = False
+    updating_window = False
+
+    def update_window(change, control):
+        nonlocal updating_window
+        if updating_window:
+            return
+        owner = change["owner"]
+        if owner is control["preset"]:
+            if control["preset"].value == "custom":
+                return
+            if control["preset"].value == "full":
+                low, high = control["full_range"]
+            else:
+                width, center = presets[control["preset"].value]
+                low, high = center - width / 2, center + width / 2
+        elif owner is control["width"] or owner is control["center"]:
+            width, center = control["width"].value, control["center"].value
+            low, high = center - width / 2, center + width / 2
+        else:
+            low, high = control["lower"].value, control["upper"].value
+        width, center = high - low, low / 2 + high / 2
+        updating_window = True
+        try:
+            if owner is not control["preset"]:
+                control["preset"].value = "custom"
+            if not all(np.isfinite(value) for value in (low, high, width, center)) or width <= 0:
+                control["message"].value = "Use finite lower < upper and width > 0; keeping last valid window."
+                return
+            control["range"] = (low, high)
+            for key, value in (("lower", low), ("upper", high),
+                               ("width", width), ("center", center)):
+                control[key].value = value
+            control["message"].value = ""
+        finally:
+            updating_window = False
+        draw()
 
     def draw(change=None):
         if updating:
@@ -480,6 +542,7 @@ def img_compare3D(img1, img2, name1="Image 1", name2="Image 2", slice=None,
         x, y, z = (slider.value for slider in sliders)
         if viewer.selected_point is not None:
             viewer.selected_point = (x, y, z)
+            viewer.selected_values = tuple(values[z, y, x].item() for values in images)
             selected.value = f"Selected (x, y, z): {(x, y, z)}"
         x0, y0, z0 = starts if crop_control.value else (0, 0, 0)
         x1, y1, z1 = ends if crop_control.value else sizes
@@ -510,7 +573,7 @@ def img_compare3D(img1, img2, name1="Image 1", name2="Image 2", slice=None,
                     zip(images, (name1, name2), windows)):
                 ax = fig.add_subplot(len(active), 2, row * 2 + column + 1)
                 axes_planes[ax] = name
-                low, high = window_control.value
+                low, high = window_control["range"]
                 ax.imshow(values[index], cmap=plt.cm.Grays_r, vmin=low, vmax=high,
                           origin="lower", extent=extent)
                 if mask_vec is not None:
@@ -519,12 +582,23 @@ def img_compare3D(img1, img2, name1="Image 1", name2="Image 2", slice=None,
                               cmap="Wistia", alpha=alpha_control.value,
                               origin="lower", extent=extent)
                 if viewer.selected_point is not None:
-                    ax.axvline(u, color="cyan", linewidth=0.8)
-                    ax.axhline(v, color="cyan", linewidth=0.8)
+                    # Break both lines around the voxel, including its edges.
+                    gap = 0.75
+                    left, right, bottom, top = extent
+                    ax.plot([u, u, np.nan, u, u],
+                            [bottom, np.clip(v - gap, bottom, top), np.nan,
+                             np.clip(v + gap, bottom, top), top],
+                            color="cyan", linewidth=0.8, solid_capstyle="butt")
+                    ax.plot([left, np.clip(u - gap, left, right), np.nan,
+                             np.clip(u + gap, left, right), right],
+                            [v, v, np.nan, v, v],
+                            color="cyan", linewidth=0.8, solid_capstyle="butt")
                 # Keep out-of-crop crosshairs from expanding the field of view.
                 ax.set_xlim(extent[:2])
                 ax.set_ylim(extent[2:])
-                ax.set_title(f"{title}\n{name.capitalize()} slice, {fixed} = {number}")
+                value = ("—" if viewer.selected_values is None
+                         else f"{viewer.selected_values[column]:.8g}")
+                ax.set_title(f"{title}\n{name.capitalize()} slice, {fixed} = {number}\nValue: {value}")
                 ax.set_xlabel(f"{horizontal}-axis")
                 ax.set_ylabel(f"{vertical}-axis")
         fig.tight_layout()
@@ -559,7 +633,11 @@ def img_compare3D(img1, img2, name1="Image 1", name2="Image 2", slice=None,
         elif event.name == "motion_notify_event":
             hover.value = f"Hover (x, y, z): {point}"
 
-    for control in [plane_control, *sliders, *windows, alpha_control,
+    for control in windows:
+        for key in ("lower", "upper", "width", "center", "preset"):
+            control[key].observe(lambda change, control=control: update_window(change, control),
+                                 names="value")
+    for control in [plane_control, *sliders, alpha_control,
                     scale_control, crop_control]:
         control.observe(draw, names="value")
     fig.canvas.mpl_connect("motion_notify_event", point_event)
